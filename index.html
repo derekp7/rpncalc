@@ -1,0 +1,1796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#2b2b2b">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <!-- Installable web app: this file + manifest.webmanifest + sw.js + icons/.
+         Must be served over https (or http://localhost) - a manifest and service
+         worker are ignored on file:// . All display modes feed isImmersive(). -->
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+    <title>RPN Scientific Calculator</title>
+    <style>
+    :root {
+        --bg-color: #1a1a1a;
+        --screen-bg: #9ea792;
+        --btn-dark: #3a3a3a;
+        --btn-light: #505050;
+        --btn-orange: #d68c45;
+        --text-color: #1a1a1a;
+        --display-text: #2b2b2b;
+    }
+
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        font-family: 'Courier New', Courier, monospace;
+        background-color: var(--bg-color);
+        display: flex;
+        justify-content: center;
+        align-items: stretch;
+        min-height: 100vh;
+        margin: 0;
+        padding: 0;
+        overflow-y: auto;
+    }
+
+    .calculator {
+        background-color: #1a1a1a;
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        width: auto;
+        max-width: 450px;
+        min-width: 320px;
+        margin: auto;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    /* Display Screen */
+    .screen-container {
+        background-color: var(--screen-bg);
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 15px;
+        box-shadow: inset 0 2px 5px rgba(0,0,0,0.2);
+        flex-shrink: 0;
+    }
+    .stack-display {
+        height: 144px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column-reverse;
+    /*    justify-content: flex-end; */
+        align-items: stretch;
+        font-size: 20px;
+        /* Explicit leading keeps stack rows a predictable height (copy 2's idea). */
+        line-height: 24px;
+        color: var(--display-text);
+        border-bottom: 1px solid rgba(0,0,0,0.2);
+        margin-bottom: 5px;
+	scrollbar-width: none;
+    }
+
+    .stack-display::-webkit-scrollbar {
+        display: none; /* Chrome/Safari/Webkit */
+    }
+
+    .stack-item {
+        display: flex;
+        justify-content: space-between;
+        padding-right: 4px;
+	scroll-snap-align: start;
+    }
+
+    .stack-pos {
+        width: 20px;
+        text-align: left;
+        font-weight: bold;
+        opacity: 0.6;
+        font-size: 12px;
+    }
+
+    .stack-val {
+        flex-grow: 1;
+        text-align: right;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 20px;
+    }
+
+    .stack-0-val {
+        font-weight: bold;
+        background-color: rgba(214, 140, 69, 0.3);
+        border-radius: 4px;
+        padding: 2px 6px;
+        margin-right: -6px;
+    }
+
+    .input-line {
+        font-size: 32px;
+        font-weight: bold;
+        color: var(--display-text);
+        text-align: right;
+        min-height: 35px;
+    }
+
+    /* Keypad */
+    .keypad {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        grid-template-rows: repeat(9, auto);
+        gap: 6px;
+        flex-grow: 1;
+        overflow: hidden;
+    }
+
+    /* The two key groups are layout-invisible by default: their buttons are laid
+       out as direct items of the single .keypad grid above, so the portrait /
+       desktop layout is byte-for-byte what it always was. Only html.wide (set by
+       JS when the viewport is much wider than it is tall) gives them boxes, and
+       then .keypad itself becomes the invisible one - see the split rules. */
+    .keys {
+        display: contents;
+    }
+
+    button {
+        border: none;
+        /* --btn-pad is the resting key height driver; fitKeys() only ever shrinks
+           it, and only when the fixed layout genuinely does not fit. */
+        padding: var(--btn-pad, 14px) 0;
+        font-size: 16px;
+        /* Deliberately NO blanket line-height here: the .btn-op keys use a 26px
+           glyph and need its natural ~31px line box. A fixed 20px (as in one
+           source copy) squeezes those four rows by 11px each and lets the glyphs
+           overflow - that was the "squished" layout. */
+        font-weight: bold;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: all 0.1s;
+        user-select: none;
+    }
+
+    button:active {
+        transform: scale(0.95);
+    }
+
+    /* Button Styles */
+    .btn-num { background-color: var(--btn-dark); color: white;}
+    .btn-op { background-color: var(--btn-orange); color: black; font-size: 26px;}
+    .btn-func { background-color: var(--btn-light); color: white;}
+    .btn-fn { background-color: #6b4c9a; color: white;}
+    .btn-inv { background-color: #d65a45; color: white;}
+    .btn-fn-a { background-color: #6b4c9a; color: white;}
+    .btn-inv-a {
+        box-shadow: 0 0 0px #d65a45, inset 0 0 15px #d65a45;
+        border-color: #d65a45;
+    }
+    .btn-deg-rad {
+        background-color: var(--btn-light);
+        color: white;
+        /* 12px instead of 11: this is a mode indicator that must be readable at a
+           glance, and its new row-9 cell has the room for it. */
+        font-size: 12px;
+        border: 2px solid transparent;
+        transition: all 0.2s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;   /* centred in its cell, from copy 2 */
+    }
+
+    /* Mode text spans */
+    .mode-text {
+        padding: 0 4px;
+        border-radius: 3px;
+        transition: all 0.2s ease;
+    }
+
+    /* When in Degree mode - highlight "Deg" with reverse video */
+    .btn-deg-rad.deg-active .mode-text.deg {
+        background-color: #4caf50; /* Green background */
+        color: white;              /* White text */
+        font-weight: bold;
+    }
+
+    .btn-deg-rad.deg-active .mode-text.rad {
+        opacity: 0.6;              /* Dim the inactive option */
+    }
+
+    /* When in Radian mode - highlight "Rad" with reverse video */
+    .btn-deg-rad.rad-active .mode-text.rad {
+        background-color: #2196f3; /* Blue background */
+        color: white;              /* White text */
+        font-weight: bold;
+    }
+
+    .btn-deg-rad.rad-active .mode-text.deg {
+        opacity: 0.6;              /* Dim the inactive option */
+    }
+
+
+
+    .btn-enter { 
+        background-color: var(--btn-orange); 
+        color: black; 
+/*        grid-column: 4 / span 2; */
+	grid-column: span 2;
+        grid-row: span 1;
+        font-size: 16px;
+    }
+    /* Full-screen toggle + small non-blocking notice */
+    .btn-fs { background-color: #2f6f5e; color: white; }
+    .btn-fs[aria-pressed="true"] { box-shadow: inset 0 0 15px #7fd8c0; }
+
+    /* Installed app mode: full screen is already the browser's own job, so the
+       toggle has nothing to offer - hide it. visibility (not display) keeps the
+       keypad cell occupied so ENTER and the column grid do not shift. */
+    html.app-mode .btn-fs { visibility: hidden; pointer-events: none; }
+
+    #toast {
+        position: fixed;
+        left: 50%;
+        /* Keep notices clear of the gesture bar / curved corners too. */
+        bottom: calc(24px + env(safe-area-inset-bottom, 0px) + env(safe-area-max-inset-bottom, 0px));
+        transform: translateX(-50%);
+        max-width: 90%;
+        background-color: rgba(50,50,50,0.95);
+        color: #fff;
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 14px;
+        text-align: center;
+        opacity: 0;
+        transition: opacity 0.25s;
+        pointer-events: none;
+        z-index: 50;
+    }
+    #toast.show { opacity: 1; }
+
+    /* Install chip: only shown when the browser says the app is installable and
+       it is not already running installed. Sits under the (pointer-events:none)
+       toast layer, inside the top safe area so it never hides behind a cutout. */
+    #installChip {
+        position: fixed;
+        left: 50%;
+        top: calc(8px + env(safe-area-inset-top, 0px));
+        transform: translateX(-50%);
+        display: none;
+        align-items: center;
+        gap: 8px;
+        background-color: #2f6f5e;
+        color: #fff;
+        padding: 8px 10px 8px 14px;
+        border-radius: 999px;
+        font-size: 14px;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+        z-index: 60;
+    }
+    html.can-install #installChip { display: inline-flex; }
+    #installChip button {
+        padding: 6px 12px;
+        font-size: 14px;
+        border-radius: 999px;
+    }
+    #installChip .install-yes { background-color: #d68c45; color: #1a1a1a; }
+    #installChip .install-no { background-color: transparent; color: #cfcfcf; padding: 6px 8px; }
+
+    .btn-spacer {
+        background-color: transparent;
+        border: none;
+        color: transparent;
+        cursor: default;
+        pointer-events: none; /* Prevents click events from being registered */
+        user-select: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .btn-half {
+        padding: 10px 0;
+        font-size: 14px;
+    }
+
+    /* Mobile - Full Height with Safe Areas
+       Two gates, one query: narrow (portrait phones) OR short (a phone turned
+       sideways, a small window). The height figure must stay in step with
+       PHONEISH_H in fitToViewport(), which makes the same call from JS against
+       the real viewport before handing it to html.wide. */
+    @media (max-width: 450px), (max-height: 620px) {
+        /* Edge insets, all measured - never guessed:
+           --safe-top / --safe-bottom / --safe-left / --safe-right are the larger of
+             (a) what the browser reports through env(safe-area-inset-*) / 
+                 env(safe-area-max-inset-*), and
+             (b) the biggest inset this device/orientation has ever reported to us
+                 (--bottom-floor / --side-floor, written by JS; --top-floor is
+                  recorded but intentionally not applied at the top in app mode).
+           On a Pixel 9 in fullscreen, (a) is what Chrome itself reports once
+           viewport-fit=cover lets it draw under the camera cutout and the curved
+           corners, so the keypad can never be pushed into them. (b) covers engines
+           that report an inset and then drop it back to 0 while still drawing
+           underneath (see Chromium's display_cutout / edge-to-edge docs). */
+        /* Windowed mode: the browser keeps its own bars outside our viewport, so
+           only what it reports matters (usually all zeros on Android). */
+        :root {
+            --safe-top:    env(safe-area-inset-top, 0px);
+            --safe-bottom: max(env(safe-area-inset-bottom, 0px),
+                               env(safe-area-max-inset-bottom, 0px));
+            --safe-left:   max(env(safe-area-inset-left, 0px),
+                               env(safe-area-max-inset-left, 0px));
+            --safe-right:  max(env(safe-area-inset-right, 0px),
+                               env(safe-area-max-inset-right, 0px));
+        }
+
+        /* Full screen / installed app: we may now be drawn under the cutout and
+           the curved corners, so add the largest inset this orientation has ever
+           reported (--*-floor, written by JS). Scoping it to .immersive matters:
+           otherwise a value learned in full screen would keep padding the page
+           after exiting, where nothing overlaps. */
+        html.immersive {
+            /* TOP: no guard by default. Measured on a Pixel 9 in app mode: the
+               viewport already starts *below* the status bar (Chrome paints that
+               band itself with our theme-color), yet env(safe-area-inset-top) /
+               the cutout inset is still reported non-zero - padding for it would
+               just double-count an area we are never drawn under, which showed up
+               as a blank strip above the display. The bottom and side insets *are*
+               honoured below, because there the page really is drawn underneath.
+               If some device ever does draw our content under its status bar /
+               cutout, set --min-top-guard to the needed height (long-press the
+               display: the readout shows what is reported). */
+            --min-top-guard: 0px;
+            --safe-top:    var(--min-top-guard);
+            --safe-bottom: max(env(safe-area-inset-bottom, 0px),
+                               env(safe-area-max-inset-bottom, 0px),
+                               var(--bottom-floor, 0px));
+            --safe-left:   max(env(safe-area-inset-left, 0px),
+                               env(safe-area-max-inset-left, 0px),
+                               var(--side-floor, 0px));
+            --safe-right:  max(env(safe-area-inset-right, 0px),
+                               env(safe-area-max-inset-right, 0px),
+                               var(--side-floor, 0px));
+        }
+
+        /* Fullscreen API active (the web view's Full button) - a DIFFERENT
+           situation from installed standalone: here Chrome really does extend the
+           viewport under the status bar and the camera cutout, because our
+           viewport-fit=cover maps to Android's SHORT_EDGES cutout mode while
+           fullscreen (see Chromium docs/ui/android/display_cutout.md). So:
+             TOP    guard ON - take the inset live from env() (Android delivers it
+                              once we draw under the cutout) and fall back on the
+                              recorded --top-floor, since Chromium zeroes env()
+                              briefly when the active frame switches.
+             BOTTOM live insets only, no floors: the gesture bar is hidden in this
+                              mode, so a bottom inset remembered from windowed /
+                              standalone would push the keys too far up (the exact
+                              complaint about the old Bars state).
+           Installed app mode never matches .api-fs, so it keeps the behaviour
+           that works today. */
+        html.api-fs {
+            --safe-top:    max(env(safe-area-inset-top, 0px), var(--top-floor, 0px),
+                               var(--min-top-guard, 0px));
+            --safe-bottom: max(env(safe-area-inset-bottom, 0px),
+                               env(safe-area-max-inset-bottom, 0px));
+            --safe-left:   max(env(safe-area-inset-left, 0px),
+                               env(safe-area-max-inset-left, 0px));
+            --safe-right:  max(env(safe-area-inset-right, 0px),
+                               env(safe-area-max-inset-right, 0px));
+        }
+
+        body {
+            /* Exact fit and no scrolling at all - full screen is a deliberate
+               action now (the Full button / installed-app display mode), so the
+               page never needs to be scrollable to reach anything, and nothing
+               hangs below the bottom of the screen. */
+            min-height: var(--app-height, 100dvh);
+            overflow: hidden;
+            overscroll-behavior: none;
+        }
+
+        /* Only for viewports too short for even the smallest keys (e.g. some
+           landscape phones): better scrollable than unreachable. fitKeys() puts
+           this class on <html> as a last resort; normal phones never get it. */
+        html.needs-scroll body {
+            overflow-y: auto;
+        }
+        html.needs-scroll .calculator {
+            height: auto;
+            min-height: var(--app-height, 100dvh);
+        }
+
+        .calculator {
+            /* Full-bleed: the safe-area insets are padding now, not margins. */
+            width: 100%;
+            max-width: none;
+            border-radius: 0;
+            box-shadow: none;
+            /* Fill exactly the height the browser leaves visible. Padding is inside
+               that height (border-box), so the guards below shrink the keys instead
+               of pushing content off screen. */
+            height: var(--app-height, 100dvh);
+            padding: calc(5px + var(--safe-top))
+                     calc(4px + var(--safe-right))
+                     calc(6px + var(--safe-bottom))
+                     calc(4px + var(--safe-left));
+            margin: 0;
+        }
+
+        .screen-container {
+            margin-bottom: 8px;
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            /* Because the page can no longer scroll, the stack window is what
+               gives way on a short viewport (132px -> down to 48px) so the keys
+               always stay fully visible above the bottom safe area. */
+            flex: 0 1 auto;
+        }
+
+        .stack-display {
+            height: var(--stack-h, 132px);
+            flex: 1 1 auto;
+            min-height: 40px;
+            line-height: 26px;   /* roomier leading for the 22px mobile digits */
+        }
+	.stack-pos {
+	    font-size: 16px;
+	}
+
+	.stack-val {
+	    font-size: 22px;
+	}
+
+        .input-line {
+            font-size: 28px;   /* copy 2's larger mobile entry line */
+        }
+
+        .keypad {
+            /* Bottom cut-off is handled by .calculator's padding above, so the
+               keypad itself needs no inset of its own. */
+            padding-bottom: 0;
+        }
+
+        /* ---------------------------------------------------------------
+           WIDE / LANDSCAPE: two columns instead of one tall one.
+           A phone on its side is ~2.3x wider than it is tall, so nine rows of
+           keys only fit by being crushed. Instead the screen splits the way a
+           wide hardware calculator is:
+
+             +---------------------+-----------------------+
+             |  stack history      |  7   8   9   /  <- -> |
+             |  input line         |  4   5   6   *   Inv  |
+             +                     +  1   2   3   -   Fn   |
+             |                     |  0   .  <    +  +/-   |
+             +-----+-----+-----+---+  Deg     ENTER        |
+             | AC  C  Edit Dup Drop|                       |
+             | Swap Roll LstX  ^ % |                       |
+             | sin cos tan ln  log |                       |
+             | sqrt 1/x   pi  e EE |                       |
+             +---------------------+-----------------------+
+
+           The display keeps the top of the left column, the four scientific /
+           stack rows (old rows 1-4) sit under it, and the number pad (old row 5
+           down) takes the whole right column. Nothing scrolls: fitKeys() still
+           arbitrates the slack between the history window and the key height.
+           --------------------------------------------------------------- */
+        html.wide .calculator {
+            display: grid;
+            /* Two equal halves; minmax(0,..) so a long number in the display can
+               never push one half wider than the other. */
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            /* Row 1 = display (takes all the leftover height), row 2 = the four
+               function rows at their natural key height. The number pad spans
+               both and is stretched instead (see .keys-num). */
+            grid-template-rows: minmax(0, 1fr) auto;
+            gap: 6px;
+        }
+
+        html.wide .screen-container {
+            grid-column: 1;
+            grid-row: 1;
+            margin-bottom: 0;      /* the grid gap does this now */
+            /* Its flexible row can be squeezed to very little on a short screen;
+               clip instead of letting the history lines paint over the keys. */
+            overflow: hidden;
+        }
+
+        /* Swap which wrapper is invisible. */
+        html.wide .keypad { display: contents; }
+
+        html.wide .keys-fn {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 6px;
+            grid-column: 1;
+            grid-row: 2;
+            align-content: end;    /* keys flush with the bottom of the column */
+        }
+
+        /* The <- / -> pair lives in a nested two-up grid (see Row 5). Its own
+           markup sets the columns inline; this lets it fill the tall cell too,
+           so the pair is as high as the digit keys beside it. */
+        html.wide .keys-num > div {
+            grid-auto-rows: 1fr;
+        }
+
+        html.wide .keys-num {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            /* Five equal rows filling the full height of the right half: the
+               digits are the keys you press most, so they get the tall cells.
+               Plain 1fr (not minmax(0,1fr)) on purpose - an fr track keeps its
+               automatic minimum, i.e. it can never squash a key below its own
+               text; if the viewport really is too short, the grid overflows and
+               fitKeys() sees that and flattens --btn-pad instead. */
+            grid-template-rows: repeat(5, 1fr);
+            gap: 6px;
+            grid-column: 2;
+            grid-row: 1 / span 2;
+        }
+    }
+    </style>
+</head>
+<body>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<div id="installChip">
+    <span>Install this calculator?</span>
+    <button class="install-yes" onclick="installApp()">Install</button>
+    <button class="install-no" aria-label="Dismiss" onclick="dismissInstallChip()">&times;</button>
+</div>
+
+<div class="calculator">
+    <div class="screen-container">
+        <!-- Stack History -->
+        <div id="stack" class="stack-display"></div>
+        <!-- Current Input -->
+        <div id="input-line" class="input-line"></div>
+    </div>
+    <div class="keypad">
+      <!-- Two key groups: the scientific/stack block (rows 1-4) and the number
+           pad (rows 5-9). In every layout except the wide one they are
+           display:contents, i.e. invisible to layout, so all 45 keys flow into
+           the single 5-column grid exactly as they always did. Only the wide
+           (landscape) rules give them a box of their own, which is what lets the
+           two halves sit side by side without touching this markup. -->
+      <div class="keys keys-fn">
+        <!-- Row 1 -->
+        <button class="btn-func" onclick="handleAllClear()">AC</button>
+        <button class="btn-func" onclick="handleClear()">C</button>
+        <button class="btn-func" onclick="handleEdit()">Edit</button>
+        <button class="btn-func" onclick="handleDup()">Dup</button>
+        <button class="btn-func" onclick="handleDrop()">Drop</button>
+
+        <!-- Row 2 -->
+        <button class="btn-func" onclick="handleSwap()">Swap</button>
+        <button class="btn-func" onclick="handleRoll()">Roll</button>
+        <button class="btn-func" onclick="handleLastX()">Lst X</button>
+        <button class="btn-func" onclick="handleOp('^')">^</button>
+        <button class="btn-func" onclick="calcFunc('percent')">%</button>
+
+        <!-- Row 3 -->
+        <button class="btn-func" data-func="sin" onclick="calcFunc('sin')">sin</button>
+        <button class="btn-func" data-func="cos" onclick="calcFunc('cos')">cos</button>
+        <button class="btn-func" data-func="tan" onclick="calcFunc('tan')">tan</button>
+        <button class="btn-func" data-func="ln" onclick="calcFunc('ln')">ln</button>
+        <button class="btn-func" data-func="log" onclick="calcFunc('log')">log</button>
+
+        <!-- Row 4: roots, constants and the exponent key (EE becomes EE- under Inv) -->
+        <button class="btn-func" data-func="sqrt" onclick="calcFunc('sqrt')">√x</button>
+        <button class="btn-func" data-func="recip" onclick="calcFunc('inv')">1/x</button>
+        <button class="btn-num" onclick="appendNum(Math.PI)">π</button>
+        <button class="btn-num" onclick="appendNum(Math.E)">e</button>
+        <button class="btn-num" data-func="EE" onclick="handleExponent(false)">EE</button>
+
+      </div><!-- /.keys-fn -->
+      <div class="keys keys-num">
+        <!-- Row 5 -->
+        <button class="btn-num" onclick="appendNum('7')">7</button>
+        <button class="btn-num" onclick="appendNum('8')">8</button>
+        <button class="btn-num" onclick="appendNum('9')">9</button>
+        <button class="btn-op" onclick="handleOp('/')">÷</button>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+            <button class="btn-func btn-half" onclick="moveCursor(-1)">←</button>
+            <button class="btn-func btn-half" onclick="moveCursor(1)">→</button>
+        </div>
+
+        <!-- Row 6 -->
+        <button class="btn-num" onclick="appendNum('4')">4</button>
+        <button class="btn-num" onclick="appendNum('5')">5</button>
+        <button class="btn-num" onclick="appendNum('6')">6</button>
+        <button class="btn-op" onclick="handleOp('*')">×</button>
+	<button class="btn-inv" onclick="toggleInv()">Inv</button>
+
+        <!-- Row 7 -->
+        <button class="btn-num" onclick="appendNum('1')">1</button>
+        <button class="btn-num" onclick="appendNum('2')">2</button>
+        <button class="btn-num" onclick="appendNum('3')">3</button>
+        <button class="btn-op" onclick="handleOp('-')">-</button>
+        <button class="btn-fn" onclick="toggleFn()">Fn</button>
+
+        <!-- Row 8 -->
+        <button class="btn-num" onclick="appendNum('0')">0</button>
+        <button class="btn-num" onclick="appendNum('.')">.</button>
+        <button class="btn-func" onclick="handleBackspace()">⌫</button>
+        <button class="btn-op" onclick="handleOp('+')">+</button>
+        <button class="btn-func" data-func="neg" onclick="toggleSign()">±</button>
+
+        <!-- Row 9: Deg/Rad moved down here (was row 4) to free the EE key. -->
+        <button class="btn-deg-rad" data-func="degRad" onclick="toggleAngleMode()">
+            <span class="mode-text deg">Deg</span>/<span class="mode-text rad">Rad</span>
+        </button>
+        <!-- Spare cell. A full-screen toggle could live here again (machinery is
+             intact: toggleFullscreen(), fullscreenchange listeners, html.api-fs
+             safe-area rules, .btn-fs styles); swap this spacer for
+             <button class="btn-fs" id="fsBtn" aria-pressed="false"
+                     onclick="toggleFullscreen()" title="Toggle full screen">Full</button>
+             and syncFsButton() picks it up by id. -->
+        <button class="btn-spacer"></button>
+        <button class="btn-spacer"></button>
+        <button class="btn-enter" onclick="handleEnter()">ENTER</button>
+      </div><!-- /.keys-num -->
+    </div>
+</div>
+
+<script>
+    // State Management
+    let stack = [];
+    let currentInput = "";
+    let cursorPos = 0;
+    let fnMode = false;
+    let invMode = false;
+    let lastX = null;
+    let pendingNegative = false;
+    let lastCalc = false;
+    let maxSeenHeight = 0;   // tallest visible height ever measured = real full-screen height
+    let refWidth = 0;        // width that reference was taken at (orientation guard)
+    let chromeHeight = 0;    // browser UI (URL bar/toolbar) currently covering the page
+    let lastLayoutKey = '';
+    let angleMode = 'deg'; // 'deg' or 'rad'
+
+    updateDegRadBtnState();
+
+    const funcButtons = [
+        /* Trig Functions */
+        ['sin', ['sin', "calcFunc('sin')"], ['asin', "calcFunc('asin')"], ['sinh', "calcFunc('sinh')"], ['asinh', "calcFunc('asinh')"]],
+        ['cos', ['cos', "calcFunc('cos')"], ['acos', "calcFunc('acos')"], ['cosh', "calcFunc('cosh')"], ['acosh', "calcFunc('acosh')"]],
+        ['tan', ['tan', "calcFunc('tan')"], ['atan', "calcFunc('atan')"], ['tanh', "calcFunc('tanh')"], ['atanh', "calcFunc('atanh')"]],
+
+        /* Log/Exp Functions */
+        ['ln', ['ln', "calcFunc('ln')"], ['exp', "calcFunc('exp')"], ['Γ(x)', "calcFunc('gamma')"], ['invΓ', "calcFunc('invGamma')"]],
+        ['log', ['log', "calcFunc('log')"], ['10^x', "calcFunc('pow10')"], ['log₂', "calcFunc('log2')"], ['2^x', "calcFunc('pow2_base')"]],
+
+        /* Roots/Powers */
+        ['sqrt', ['√x', "calcFunc('sqrt')"], ['x²', "calcFunc('pow2')"], ['∛x', "calcFunc('cbrt')"], ['x³', "calcFunc('pow3')"]],
+        ['recip', ['1/x', "calcFunc('inv')"], null, ['n!', "calcFunc('fact')"], null ],
+
+        ['neg', ['±',"toggleSign()"], null, ['neg', "handleNegateStack()"], null ],
+        ['EE', ['EE',"handleExponent(false)"], ['EE-', "handleExponent(true)"], null, null ]
+
+        /* Stack Operations */
+/*
+        ['roll', ['Roll↓', "handleRoll()"], ['Roll↑', "handleRollUp()"], ['Roll N', "handleRollN()"], ['Roll N↑', "handleRollNUp()"]],
+        ['dup', ['Dup', "handleDup()"], ['Drop', "handleDrop()"], ['Dup N', "handleDupN()"], ['Drop N', "handleDropN()"]],
+        ['edit', ['Edit', "handleEdit()"], ['Push', "handlePush()"], ['Edit N', "handleEditN()"], ['Push N', "handlePushN()"]],
+        ['swap', ['Swap', "handleSwap()"], ['Swap', "handleSwap()"], ['Swap N', "handleSwapN()"], ['Swap N', "handleSwapN()"]],
+        ['drop', ['Drop', "handleDrop()"], ['Restore', "handleRestore()"], ['Drop N', "handleDropN()"], ['Drop All', "handleDropAll()"]]
+*/
+    ];
+
+
+    const stackDisplay = document.getElementById('stack');
+    const inputLine = document.getElementById('input-line');
+
+    // Update the UI
+    function updateDisplay() {
+        // Render Stack with Position Numbers aligned to bottom
+        let html = '';
+        const stackSize = stack.length;
+        
+//        stack.forEach((val, index) => {
+	for (let i = stackSize - 1; i >= 0; i--) {
+	    const val = stack[i];
+            const level = stackSize - i - 1; 
+	    if (level == 0 && lastCalc == true)
+		html += `<div class="stack-item"><span class="stack-pos">${level}:</span><span class="stack-val stack-0-val">${val.toString()}</span></div>`;
+	    else
+		html += `<div class="stack-item"><span class="stack-pos">${level}:</span><span class="stack-val">${val.toString()}</span></div>`;
+        }
+        stackDisplay.innerHTML = html;
+        
+        // Render Current Input with cursor position indicator and pending negative sign
+        const beforeCursor = currentInput.substring(0, cursorPos);
+        const afterCursor = currentInput.substring(cursorPos);
+        
+        if (pendingNegative && currentInput === "") {
+            inputLine.textContent = '-' + '|' + afterCursor;
+            // Adjust cursor position for display purposes only
+            cursorPos++;
+        } else {
+            inputLine.textContent = beforeCursor + '|' + afterCursor;
+        }
+    }
+
+    // Add number to current buffer at cursor position
+    function appendNum(num) {
+        // A number has exactly one decimal point, and only in its mantissa. Without
+        // this a second '.' is accepted and parseFloat() silently truncates
+        // ("1.2.3" -> 1.2); a '.' inside an exponent does the same ("1e+2.5" -> 100).
+        if (num === '.') {
+            const eAt = currentInput.indexOf('e');
+            const mantissa = eAt < 0 ? currentInput : currentInput.substring(0, eAt);
+            if (mantissa.indexOf('.') >= 0) return;      // this number has one already
+            if (eAt >= 0 && cursorPos > eAt) return;     // cursor is inside the exponent
+        }
+
+        if (currentInput === "0" && num !== "." && typeof num === 'string' &&
+            num != "e+" && num != "e-") currentInput = "";
+        
+        const char = String(num);
+        currentInput = currentInput.substring(0, cursorPos) + char + currentInput.substring(cursorPos);
+        // += length, not ++: multi-char inserts (pi, e) must leave the cursor after
+        // the whole value instead of inside it.
+        cursorPos += char.length;
+        
+        // If we had a pending negative flag and just started entering digits, apply it
+        if (pendingNegative && currentInput.length === 1 && num !== '.') {
+            currentInput = "-" + currentInput;
+            cursorPos++;
+            pendingNegative = false;
+        } else if (pendingNegative && currentInput.startsWith('.')) {
+            // Handle case where user starts with decimal point
+            currentInput = "-" + currentInput;
+            cursorPos++;
+            pendingNegative = false;
+        }
+        
+        updateDisplay();
+    }
+
+    // Handle the ENTER key
+    function handleEnter() {
+        if (currentInput === "") {
+	    updateDisplay();
+	    return;
+	}
+
+        // Backstop for the two half-typed forms: a trailing marker with no digits
+        // ("2e+") and, defensively, an orphaned leading one ("-e-15"). Edits prune
+        // these as they happen; ENTER must never silently swallow what is left.
+        const entry = currentInput.replace(/^(-?)e[+-]/, '$1').replace(/e[+-]?$/i, '');
+        const val = parseFloat(entry);
+        if (isNaN(val)) {
+            currentInput = "";
+            cursorPos = 0;
+            pendingNegative = false;
+            updateDisplay();
+            return;
+        }
+        lastX = stack.length > 0 ? stack[stack.length - 1] : null;
+        stack.push(val);
+        currentInput = "";
+        cursorPos = 0;
+        updateDisplay();
+    }
+
+    // Clear Current Entry (C)
+    function handleClear() {
+        currentInput = "";
+        cursorPos = 0;
+        pendingNegative = false;
+        updateDisplay();
+    }
+
+    // All Clear - clears stack and input
+    function handleAllClear() {
+        stack = [];
+        lastX = null;
+        currentInput = "";
+        cursorPos = 0;
+        updateDisplay();
+    }
+
+    // Drop top of stack (without putting in edit)
+    function handleDrop() {
+        if(stack.length > 0) {
+            lastX = stack[stack.length - 1];
+            stack.pop();
+            updateDisplay();
+        }
+    }
+
+    // Edit - Pop from stack into edit window
+    function handleEdit() {
+        if (currentInput !== "") {
+            handleEnter();
+        }
+        
+        if (stack.length > 0) {
+            lastX = stack[stack.length - 1];
+            currentInput = stack.pop().toString();
+            cursorPos = currentInput.length;
+            updateDisplay();
+        }
+    }
+
+    // Duplicate top of stack
+    function handleDup() {
+        if (currentInput !== "") {
+            handleEnter();
+        }
+        
+        if (stack.length > 0) {
+            const val = stack[stack.length - 1];
+            stack.push(val);
+            updateDisplay();
+        }
+    }
+
+    // Swap top two stack entries
+    function handleSwap() {
+        if (currentInput !== "") {
+            handleEnter();
+        }
+        
+        if (stack.length >= 2) {
+            const a = stack.pop();
+            const b = stack.pop();
+            stack.push(a);
+            stack.push(b);
+            updateDisplay();
+        }
+    }
+
+    // Roll down the stack
+    function handleRoll() {
+        if (currentInput !== "") {
+            handleEnter();
+        }
+        
+        if (stack.length >= 2) {
+	    if (pendingNegative) {
+		toggleSign();
+		const val = stack.shift();
+		stack.push(val);
+		updateDisplay();
+
+	    }
+	    else {
+		const val = stack.pop();
+		stack.unshift(val);
+		updateDisplay();
+	    }
+        }
+    }
+
+    // Recall Last X
+    function handleLastX() {
+        if (lastX !== null) {
+            currentInput = lastX.toString();
+            cursorPos = currentInput.length;
+            updateDisplay();
+        }
+    }
+    // Toggle Fn mode - lightweight state change + update buttons
+    function toggleFn() {
+        fnMode = !fnMode;
+        updateButtonStates();
+    }
+
+    // Toggle Inv mode - lightweight state change + update buttons
+    function toggleInv() {
+        invMode = !invMode;
+        updateButtonStates();
+    }
+
+    // Update all button states based on current fnMode/invMode combination
+    function updateButtonStates() {
+
+        funcButtons.forEach(item => {
+            const btnName = item[0];
+            const btn = document.querySelector(`button[data-func="${btnName}"]`);
+	    let uInvMode = invMode;
+	    let uFnMode = fnMode;
+            
+            if (!btn) return;
+
+            // Calculate state index based on fnMode and invMode combination
+            // 1=Normal, 2=Inv, 3=Fn, 4=Both
+            let stateIndex = 1 + (invMode ? 1 : 0) + (fnMode ? 2 : 0);
+	    // Fallback when this button has no entry for the current combination.
+	    // Prefer dropping Fn before Inv: a button like EE defines only Normal/Inv,
+	    // so with both modifiers on it must still show its Inv form ('EE-'),
+	    // which an Inv-first decrement would have skipped past.
+	    if (! item[stateIndex]) {
+		if (stateIndex == 4) {
+		    if (item[3]) {
+			stateIndex = 3;
+		    }
+		    else if (item[2]) {
+			stateIndex = 2;
+		    }
+		} else if (stateIndex == 3) {
+		    if (item[1]) {
+			stateIndex = 1;
+		    }
+		} else if (stateIndex == 2) {
+		    stateIndex = 1;
+		}
+	    }
+
+            const stateData = item[stateIndex];
+
+            if (stateData) {
+                // Update button text
+                btn.textContent = stateData[0];
+
+                // Update onclick parameter
+                btn.setAttribute('onclick', `${stateData[1]}`);
+
+		// Highlight only the buttons that actually changed for this modifier:
+		// Fn tint from state 3+, Inv tint from the odd states (2 = Inv only,
+		// 4 = both). A button that fell back to its normal form stays plain.
+		updateButtonVisuals(btn, stateIndex > 2 ? uFnMode : null,
+				    (stateIndex - 1) % 2 == 1 ? uInvMode : false);
+            }
+
+        });
+
+        // Update Fn and Inv toggle buttons themselves (persistent indicators)
+    //    updateModifierButtonIndicators();
+    }
+
+    // Visual indicator for individual function buttons (based on global modes)
+    function updateButtonVisuals(btn, fnActive, invActive) {
+        // Remove all mode classes first
+        btn.classList.remove('btn-fn-a', 'btn-inv-a');
+
+	if (fnActive) btn.classList.add('btn-fn-a');
+	if (invActive) btn.classList.add('btn-inv-a');
+    }
+
+    // Handle Scientific Functions (Unary operations)
+    function calcFunc(funcName) {
+	// Angle conversions both ways: inputs into the trig functions, results out of
+	// the inverse ones. (The first source copy converted only on the way in, so
+	// asin/acos/atan returned radians even in Deg mode - fixed here.)
+	const pd2r = (d) => angleMode === 'deg' ? d * Math.PI / 180 : d;
+	const pr2d = (r) => angleMode === 'deg' ? r * 180 / Math.PI : r;
+        if (currentInput !== "") {
+            handleEnter(); 
+        }
+	lastCalc = true;
+
+        if (stack.length < 1) return;
+
+        const a = stack.pop();
+        lastX = a;
+        let result = 0;
+
+	switch(funcName) {
+	    case 'sin': result = Math.sin(pd2r(a)); break;
+	    case 'cos': result = Math.cos(pd2r(a)); break;
+	    case 'tan': result = Math.tan(pd2r(a)); break;
+	    case 'asin':
+		if (a < -1 || a > 1) { alert("Domain error"); stack.push(a); return; }
+		result = pr2d(Math.asin(a)); break;
+	    case 'acos':
+		if (a < -1 || a > 1) { alert("Domain error"); stack.push(a); return; }
+		result = pr2d(Math.acos(a)); break;
+	    case 'atan': result = pr2d(Math.atan(a)); break;
+
+	    case 'ln': result = Math.log(a); break;
+	    case 'log': result = Math.log10(a); break;
+	    case 'exp': result = Math.exp(a); break;
+	    case 'pow10': result = Math.pow(10, a); break;
+	    case 'pow2': result = a * a; break;
+	    case 'pow3': result = a * a * a; break; // x³
+	    case 'sqrt': 
+		if (a < 0) { alert("Complex number"); stack.push(a); return; }
+		result = Math.sqrt(a); 
+		break;
+	    case 'cbrt': 
+		if (a < 0) { alert("Complex number"); stack.push(a); return; }
+		result = Math.cbrt(a); break; // cube root
+	    case 'inv': 
+		if (a === 0) { alert("Div by zero"); stack.push(a); return; }
+		result = 1 / a; 
+		break;
+	    case 'fact': 
+		if (!Number.isInteger(a) || a < 0) { alert("Factorial requires non-negative integer"); stack.push(a); return; }
+		result = factorial(a); break; // x!
+	    case 'percent': result = a / 100; break;
+	    case 'sinh':
+		result = (Math.exp(a) - Math.exp(-a)) / 2;
+		break;
+
+	    // Hyperbolic Cosine
+	    case 'cosh':
+		result = (Math.exp(a) + Math.exp(-a)) / 2;
+		break;
+
+	    // Hyperbolic Tangent
+	    case 'tanh':
+		const expPos = Math.exp(a);
+		const expNeg = Math.exp(-a);
+		if (expPos === Infinity || expNeg === Infinity) {
+		    result = a > 0 ? 1 : -1; // Handle overflow
+		} else {
+		    result = (expPos - expNeg) / (expPos + expNeg);
+		}
+		break;
+
+	    // Inverse Hyperbolic Sine
+	    case 'asinh':
+		result = Math.log(a + Math.sqrt(a * a + 1));
+		break;
+
+	    // Inverse Hyperbolic Cosine
+	    case 'acosh':
+		if (a < 1) { alert("Domain error: acosh requires x ≥ 1"); stack.push(a); return; }
+		result = Math.log(a + Math.sqrt(a * a - 1));
+		break;
+
+	    // Inverse Hyperbolic Tangent
+	    case 'atanh':
+		if (a <= -1 || a >= 1) { alert("Domain error: atanh requires -1 < x < 1"); stack.push(a); return; }
+		result = Math.log((1 + a) / (1 - a)) / 2;
+		break;
+
+	    // Gamma - reached via Fn on the ln key. x! = Γ(x+1)
+	    case 'gamma':
+		if (a < 0 && Number.isInteger(a)) {
+		    alert("Gamma undefined for negative integers");
+		    stack.push(a);
+		    return;
+		}
+		result = gamma(a + 1);
+		break;
+
+	    // Inverse Gamma - Fn+Inv on the ln key
+	    case 'invGamma':
+		if (a < 0.8856) {
+		    alert("Inverse Gamma undefined for a < 0.8856");
+		    stack.push(a);
+		    return;
+		}
+		result = invGamma(a);
+		break;
+	}
+
+        stack.push(parseFloat(result.toPrecision(12)));
+        updateDisplay();
+	lastCalc = false;
+    }
+
+    // Helper function for factorial
+    function factorial(n) {
+        if (n === 0 || n === 1) return 1;
+        let result = 1;
+        for (let i = 2; i <= n; i++) {
+            result *= i;
+        }
+        return result;
+    }
+
+    // Gamma function - extends factorial to real numbers (Lanczos approximation,
+    // Numerical Recipes form). Γ(n) = (n-1)! for integers, so x! is gamma(x + 1).
+    // NOTE: the second source copy divided by neither z nor used t = z + 5.5 here,
+    // which made every result ~1.6x too large (4! came out as 39.55). The /z and
+    // the 5.5 offset below are what make it agree with Γ to ~1e-9.
+    function gamma(z) {
+        if (z < 0.5) {
+            // Reflection formula for z < 0.5
+            return Math.PI / (Math.sin(Math.PI * z) * gamma(1 - z));
+        }
+
+        const c = [
+            76.18009172947146,
+            -86.50532032941677,
+            24.01409824083091,
+            -1.231739572450155,
+            0.1208650973866179e-2,
+            -0.5395239384953e-5
+        ];
+
+        let y = z;
+        let ser = 1.000000000190015;
+        for (let i = 0; i < c.length; i++) {
+            y += 1;                       // denominators z+1 .. z+6
+            ser += c[i] / y;
+        }
+
+        const t = z + 5.5;
+        return Math.sqrt(2 * Math.PI) * (ser / z) *
+               Math.pow(t, z + 0.5) * Math.exp(-t);
+    }
+
+    // Inverse Gamma: Newton-Raphson for x where Γ(x+1) = y
+    function invGamma(y) {
+        if (y < 0.8856) {
+            alert("Inverse Gamma undefined for y < 0.8856");
+            return NaN;
+        }
+
+        let x = Math.log(y);   // initial guess
+
+        for (let i = 0; i < 20; i++) {
+            const g = gamma(x + 1);
+            if (Math.abs(g - y) < 0.0000001) break;
+
+            const dg = (gamma(x + 1.0001) - g) / 0.0001;   // derivative estimate
+            x -= (g - y) / dg;
+        }
+
+        return x;
+    }
+
+    // The exponent marker ('e+' / 'e-') is ONE editing token. The cursor steps
+    // over both characters at once and backspace removes both, so an edit can
+    // never leave something the EE key itself could not produce - "5+3" (sign
+    // deleted) or "53" ('e' deleted). Markers are always two characters: they are
+    // only inserted as a pair, and Number.prototype.toString() always writes the
+    // exponent with a sign (1e+21, 5e-7), so values recalled by Edit qualify too.
+    function markerAt(s, i) {
+        return s[i] === 'e' && (s[i + 1] === '+' || s[i + 1] === '-');
+    }
+
+    // Move cursor left or right in edit window (a marker counts as one step)
+    function moveCursor(direction) {
+        if (direction > 0) {
+            cursorPos += markerAt(currentInput, cursorPos) ? 2 : 1;
+        } else {
+            cursorPos -= markerAt(currentInput, cursorPos - 2) ? 2 : 1;
+            // defensive: never come to rest between 'e' and its sign
+            if (markerAt(currentInput, cursorPos - 1)) cursorPos--;
+        }
+        if (cursorPos < 0) cursorPos = 0;
+        if (cursorPos > currentInput.length) cursorPos = currentInput.length;
+        updateDisplay();
+    }
+    // Toggle sign of current input value or set pending negative flag
+    function toggleSign() {
+        if (currentInput === "") {
+            // No digits entered yet, toggle the pending negative flag
+            pendingNegative = !pendingNegative;
+            updateDisplay();
+        } else {
+            // Digits already entered, negate the current value
+            const val = parseFloat(currentInput);
+            if (!isNaN(val)) {
+                currentInput = (-val).toString();
+                cursorPos = currentInput.length;
+                pendingNegative = false; // Clear pending flag since we have a value now
+                updateDisplay();
+            }
+        }
+    }
+
+    // EE - exponent entry, HP style. Inserts 'e+' at the cursor; with Inv (shown
+    // as 'EE-') inserts 'e-'. If the number already carries an exponent, both
+    // forms flip that sign instead of inserting a second marker (this folds in
+    // handleExponentSign() from the second source copy, which was defined but
+    // never wired up). Needs a mantissa, so it is inert on an empty entry.
+    function handleExponent(negative) {
+        const marker = currentInput.toLowerCase().indexOf('e');
+
+        if (marker !== -1) {
+            // Already has an exponent: set/flip its sign, leave the cursor sane.
+            const after = currentInput.substring(marker + 1);
+            const sign = negative ? '-' : '+';
+            currentInput = currentInput.substring(0, marker + 1) + sign +
+                           (/^[+-]/.test(after) ? after.substring(1) : after);
+            cursorPos = Math.min(cursorPos, currentInput.length);
+            updateDisplay();
+            return;
+        }
+
+        // No mantissa yet - nothing sensible to attach an exponent to.
+        if (currentInput === '' || currentInput === '-' || /\.$/.test(currentInput)) return;
+
+        const ins = negative ? 'e-' : 'e+';
+        currentInput = currentInput.substring(0, cursorPos) + ins + currentInput.substring(cursorPos);
+        cursorPos += ins.length;
+        updateDisplay();
+    }
+
+    // Negate top of stack value
+    function handleNegateStack() {
+        if (currentInput !== "") {
+            handleEnter();
+        }
+        
+        if (stack.length > 0) {
+            const a = stack.pop();
+            lastX = a;
+            stack.push(-a);
+            updateDisplay();
+        }
+    }
+
+    // Backspace - delete one character to the left of the cursor, or the whole
+    // exponent marker when its two characters are what sits there.
+    function handleBackspace() {
+        if (cursorPos <= 0) return;
+
+        const s = currentInput;
+        let n = 1;
+        if (markerAt(s, cursorPos - 2)) {
+            n = 2;                                  // cursor at the pair's right edge
+        } else if (markerAt(s, cursorPos - 1)) {
+            // Defensive: cursor sitting between 'e' and its sign. No key sequence
+            // reaches that state (moveCursor steps over the pair), but tap-to-position
+            // or a future edit might - delete the whole pair rather than half of it.
+            cursorPos++;
+            n = 2;
+        }
+        currentInput = s.substring(0, cursorPos - n) + s.substring(cursorPos);
+        cursorPos -= n;
+
+        // A marker needs digits in front of it to exponentiate. Deleting the last
+        // mantissa character can orphan one: "5e+3" -> "e+3", or (with a leading
+        // minus) "-4e-15" -> "-e-15". parseFloat() reads both as NaN, so take the
+        // orphaned marker along and keep whatever remains - including the '-'.
+        const orphan = /^(-?)(e[+-])/.exec(currentInput);
+        if (orphan) {
+            // Remove only the 'e[+-]' part. Group 1 is a minus we want to keep, so
+            // its length must be stepped over rather than counted as removed -
+            // otherwise "-e+1" came out as "+1".
+            const at = orphan.index + orphan[1].length;
+            currentInput = currentInput.substring(0, at) + currentInput.substring(at + 2);
+        }
+        if (cursorPos > currentInput.length) cursorPos = currentInput.length;
+        updateDisplay();
+    }
+
+    // Handle Basic Arithmetic (+, -, *, /, ^)
+    function handleOp(operator) {
+        if (currentInput !== "") {
+            handleEnter();
+        }
+	lastCalc = true;
+
+        if (operator === '^') {
+            if (stack.length < 2) return;
+            const b = stack.pop();
+            const a = stack.pop();
+            lastX = b;
+            stack.push(parseFloat(Math.pow(a, b).toPrecision(12)));
+            updateDisplay();
+        } else {
+            if (stack.length < 2) return;
+
+            const b = stack.pop();
+            const a = stack.pop();
+            let result = 0;
+
+            switch(operator) {
+                case '+': result = a + b; break;
+                case '-': result = a - b; break;
+                case '*': result = a * b; break;
+                case '/': 
+                    if(b === 0) { alert("Div by zero"); stack.push(a); stack.push(b); return; }
+                    result = a / b; 
+                    break;
+            }
+
+            lastX = b;
+            stack.push(parseFloat(result.toPrecision(12)));
+            updateDisplay();
+        }
+	lastCalc = false;
+    }
+
+    // Toggle Angle Mode (Deg/Rad)
+    function toggleAngleMode() {
+        angleMode = angleMode === 'deg' ? 'rad' : 'deg';
+        updateDegRadBtnState();
+        updateDisplay();
+    }
+
+    // Update button states (including angle mode indicator)
+
+    // Update angle mode toggle button visual (highlight active word)
+    function updateDegRadBtnState() {
+        const degRadBtn = document.querySelector('button[data-func="degRad"]');
+        if (degRadBtn) {
+            degRadBtn.classList.remove('deg-active', 'rad-active');
+
+            if (angleMode === 'deg') {
+                degRadBtn.classList.add('deg-active');
+            } else {
+                degRadBtn.classList.add('rad-active');
+            }
+        }
+    }
+
+
+    // ------------------------------------------------------------------
+    // Viewport + edge auto-detection - measured, never guessed
+    //
+    // Two measurements feed the CSS custom properties:
+    //   1. how much of the screen is actually visible -> --app-height
+    //      (Chrome moves window.innerHeight with its toolbar; Firefox keeps it
+    //      fixed and only moves the visual viewport, so take the smaller of the
+    //      two readings - that is always the truth on both.)
+    //   2. how much of it is covered by hardware or browser UI (camera cutout,
+    //      status bar, curved corners, gesture bar) -> --top-floor etc.
+    //      Read back out of env(safe-area-inset-*) with a probe element, because
+    //      those values are not exposed to JS any other way. Once viewport-fit=
+    //      cover lets Chrome draw under the cutout in full screen, this is the
+    //      number Chrome itself hands us for it - no device-specific constants.
+    const visualVP = window.visualViewport;   // Visual Viewport API
+
+    function measureVisibleHeight() {
+        const h = visualVP ? Math.min(window.innerHeight, visualVP.height) : window.innerHeight;
+        return Math.max(0, Math.round(h));
+    }
+
+    // --- edge (safe area) probe ---------------------------------------------
+    const insetProbe = document.createElement('div');
+    insetProbe.setAttribute('aria-hidden', 'true');
+    insetProbe.style.cssText =
+        'position:fixed;top:0;left:0;width:0;height:0;visibility:hidden;' +
+        'pointer-events:none;' +
+        'padding-top:env(safe-area-inset-top,0px);' +
+        'padding-bottom:env(safe-area-inset-bottom,0px);' +
+        'padding-left:env(safe-area-inset-left,0px);' +
+        'padding-right:env(safe-area-inset-right,0px);';
+    document.body.appendChild(insetProbe);
+
+    function readInset(side) {                 // 'Top' | 'Bottom' | 'Left' | 'Right'
+        if (!window.getComputedStyle) return 0;
+        const v = parseFloat(window.getComputedStyle(insetProbe)['padding' + side]);
+        return isFinite(v) ? v : 0;
+    }
+
+    // Largest inset ever reported per orientation. Two reasons to remember it:
+    //   * Chromium resets safe-area values when the "active frame" changes (which
+    //     entering full screen does), and its dynamic insets shrink/grow with the
+    //     browser controls, so a 0 reading is not proof that nothing overlaps.
+    //   * The bottom inset seen while windowed (Android's gesture-navigation area,
+    //     which spans the curved bottom corners) is exactly what we want to keep
+    //     clear once full screen hides that bar and reports 0 instead.
+    // Floors are always learned, but CSS only applies them under html.immersive,
+    // so a value learned in one mode never pads the other.
+    let floorTop = 0, floorBottom = 0, floorSide = 0, floorOrientation = '';
+
+    function updateInsetFloors() {
+        const t = readInset('Top'), b = readInset('Bottom');
+        const side = Math.max(readInset('Left'), readInset('Right'));
+        // Key on orientation only - the width/height numbers also change when a
+        // toolbar tucks away, which must not discard what we have learned.
+        const orient = window.innerWidth > window.innerHeight ? 'landscape' : 'portrait';
+
+        if (orient !== floorOrientation) {
+            // Rotation: the cutout moves to another edge, so start over.
+            floorOrientation = orient;
+            floorTop = t; floorBottom = b; floorSide = side;
+        } else {
+            if (t > floorTop) floorTop = t;
+            if (b > floorBottom) floorBottom = b;
+            if (side > floorSide) floorSide = side;
+        }
+        return { top: Math.round(floorTop), bottom: Math.round(floorBottom), side: Math.round(floorSide) };
+    }
+
+    // --- one column or two? -------------------------------------------------
+    // A phone lying on its side is over twice as wide as it is tall, and nine
+    // rows of keys cannot fit in ~360px without being flattened. Past this
+    // aspect ratio the keypad splits into the two-column landscape layout (see
+    // html.wide in CSS); below it we stay with the single tall column.
+    // The minimum width matters: splitting a narrow window would give two stacks
+    // of ~30px-wide keys, which is worse than scrolling. PHONEISH_H must equal
+    // the (max-height: 620px) in the mobile media query - above it the CSS that
+    // .wide switches on does not exist, so the class must not be set.
+    const WIDE_RATIO = 1.3;      // width / height at or above which we split
+    const WIDE_MIN_W = 560;      // below this the two halves are too narrow
+    const PHONEISH_H = 620;
+
+    function isWideLayout(w, h) {
+        if (h <= 0 || h > PHONEISH_H) return false;
+        return w >= WIDE_MIN_W && (w / h) >= WIDE_RATIO;
+    }
+
+    function fitToViewport() {
+        const visible = measureVisibleHeight();
+        if (visible === 0) return;   // not measurable right now, keep current layout
+
+        const immersive = isImmersive();
+        const floors = updateInsetFloors();
+        const vw = Math.round(window.innerWidth);
+        const wide = isWideLayout(vw, Math.round(window.innerHeight));
+
+        // How much window the browser UI is covering right now; informational,
+        // and always 0 when immersive (there is no toolbar left to cover us).
+        if (immersive) {
+            chromeHeight = 0;
+        } else {
+            const w = vw;
+            if (w !== refWidth) { refWidth = w; maxSeenHeight = visible; }
+            else if (visible > maxSeenHeight) maxSeenHeight = visible;
+            chromeHeight = maxSeenHeight - visible;
+        }
+
+        const key = (immersive ? 'F' : 'W') + (wide ? '2' : '1') + ':' + vw + ':' + visible +
+                    ':' + floors.top + '/' + floors.bottom + '/' + floors.side;
+        if (key === lastLayoutKey) return;           // nothing moved -> no restyle
+        lastLayoutKey = key;
+
+        const rootEl = document.documentElement;
+        // Gates the edge guards above: they only apply when we can be drawn under
+        // hardware UI. Also handy for styling from CSS.
+        rootEl.classList.toggle('immersive', immersive);
+        // One column (portrait / narrow) or two (landscape / wide). Set before
+        // fitKeys() so it measures the layout this decision produces.
+        rootEl.classList.toggle('wide', wide);
+
+        const rootStyle = rootEl.style;
+        rootStyle.setProperty('--app-height', visible + 'px');
+        rootStyle.setProperty('--chrome-height', chromeHeight + 'px');
+        // App mode never pads the top with this (viewport already starts below
+        // the status bar there); the Fullscreen-API state does, as a fallback for
+        // env() - see --safe-top in the @media block. Also shown by diagnostics.
+        rootStyle.setProperty('--top-floor', floors.top + 'px');
+        rootStyle.setProperty('--bottom-floor', floors.bottom + 'px');
+        rootStyle.setProperty('--side-floor', floors.side + 'px');
+
+        fitKeys();
+    }
+
+    // The page no longer scrolls, so nothing may stick out past the bottom safe
+    // area: on a short viewport (landscape phones, a big cutout guard) give space
+    // back in a fixed order - first the stack history window, then the key height
+    // - instead of letting the ENTER row be clipped by the curved corners.
+    const KEY_BASE_PAD = 14;   // matches the CSS default
+    // Resting pad for the function block in the two-column layout. It is smaller
+    // on purpose: there the number pad is sized by its grid cells (five tall
+    // rows), while this block's height is exactly what is left over for the
+    // history window - flatter function keys buy those keys back as more lines
+    // of stack.
+    const KEY_BASE_PAD_WIDE = 11;
+    const KEY_MIN_PAD = 5;
+    const STACK_BASE_H = 132;
+    const STACK_MIN_H = 40;
+
+
+    // Natural height of the whole layout minus what is actually on screen.
+    // The calculator clips its own overflow, so scrollHeight of the box as sized
+    // cannot show the shortfall - measuring it with height:auto can, and it all
+    // happens inside one script turn so nothing flashes.
+    function layoutDeficit(calc) {
+        calc.style.height = 'auto';
+        const natural = calc.scrollHeight;
+        calc.style.height = '';                        // back to var(--app-height)
+        return Math.round(natural - calc.clientHeight);
+    }
+
+    function fitKeys() {
+        const calc = document.querySelector('.calculator');
+        const rootEl = document.documentElement;
+        if (!calc) return;
+        const rootStyle = rootEl.style;
+        rootEl.classList.remove('needs-scroll');   // re-decided from scratch
+
+        // Which layout are we actually in? Ask the computed style instead of
+        // trusting the class: the two-column rules need html.wide AND the media
+        // query, and .calculator only computes to grid when both hold. That makes
+        // this function correct whatever the two decisions do on their own.
+        const wide = window.getComputedStyle &&
+                     getComputedStyle(calc).display === 'grid';
+        // Padding edges a --btn-pad change moves: one column = 9 rows x 2 sides;
+        // two columns = the number pad's 5 rows x 2, since the blocks sit side by
+        // side and overlap vertically.
+        const units = wide ? 10 : 18;
+        const basePad = wide ? KEY_BASE_PAD_WIDE : KEY_BASE_PAD;
+        rootStyle.setProperty('--stack-h', STACK_BASE_H + 'px');
+        rootStyle.setProperty('--btn-pad', basePad + 'px');
+        let deficit = layoutDeficit(calc);
+        if (deficit <= 0) return;                     // everything already fits
+
+        // 1. shrink the stack history window first (least harmful)
+        const stackGive = Math.min(deficit, STACK_BASE_H - STACK_MIN_H);
+        if (stackGive > 0) {
+            rootStyle.setProperty('--stack-h', (STACK_BASE_H - stackGive) + 'px');
+            deficit = layoutDeficit(calc);
+        }
+        if (deficit <= 0) return;
+
+        // 2. then flatten the keys, re-measuring after each pass. The first pass
+        //    uses the row-count estimate; a couple of confirming passes mean the
+        //    two-column layout converges however its slack is distributed (which
+        //    column binds, how much the display gave back) without hard-coding
+        //    any of that.
+        let pad = basePad;
+        for (let i = 0; i < 4 && deficit > 1; i++) {
+            const room = pad - KEY_MIN_PAD;
+            if (room <= 0.05) break;                  // keys already as flat as allowed
+            const step = Math.min(room, Math.max(0.25, deficit / units));
+            pad = Math.round((pad - step) * 100) / 100;
+            rootStyle.setProperty('--btn-pad', pad + 'px');
+            deficit = layoutDeficit(calc);
+        }
+
+        // 3. still not enough? Then let the page scroll rather than bury the
+        //    bottom rows behind the curved corners.
+        if (deficit > 1) rootEl.classList.add('needs-scroll');
+    }
+
+    // Fit immediately (script is at the end of <body>) and then follow the viewport.
+    fitToViewport();
+
+    // resize covers Chrome; visualViewport events cover Firefox/Safari. Both are
+    // cheap because fitToViewport() returns early when nothing has changed, so no
+    // debouncing is needed and the reflow tracks the toolbar animation itself.
+    window.addEventListener('resize', fitToViewport);
+    window.addEventListener('orientationchange', fitToViewport);
+    if (visualVP) {
+        visualVP.addEventListener('resize', fitToViewport);
+        visualVP.addEventListener('scroll', fitToViewport);
+    }
+    // Safety net for engines that fire no event for a collapsing toolbar.
+    setInterval(fitToViewport, 500);
+
+    // ------------------------------------------------------------------
+    // Full screen: the standard, documented way in.
+    //
+    // STATUS: dormant by design - no #fsBtn exists in the keypad any more (row 9
+    // uses a spacer), so nothing calls this interactively. Kept complete and
+    // wired: re-adding the button markup restores the feature exactly, including
+    // the html.api-fs safe-area handling for the under-cutout fullscreen case.
+    //
+    // Scrolling hard enough to make Chrome tuck its toolbar away was never a
+    // spec'd behaviour (it is a browser UX heuristic, and it keeps changing).
+    // The supported equivalents are:
+    //   1. Fullscreen API - documentElement.requestFullscreen({navigationUI:
+    //      'hide'}) from a user gesture; exits via Esc / system back.
+    //      Not available on iOS (WebKit has no element fullscreen for pages),
+    //      so that case is reported instead of silently doing nothing.
+    //   2. Manifest display mode - install the page (Add to Home Screen /
+    //      Install app) with "display": "standalone" or "fullscreen"; then the
+    //      browser chrome is gone from launch, permanently. iOS does this via
+    //      apple-mobile-web-app-capable, already set in <head>.
+    // Both are detected by (display-mode: ...) media queries / the Fullscreen
+    // API state, and both funnel into fitToViewport() so layout follows.
+    const fsBtn = document.getElementById('fsBtn');
+
+    function mm(q) { return window.matchMedia ? window.matchMedia(q).matches : false; }
+
+    // True when the browser has already handed us its whole window.
+    function isImmersive() {
+        return !!(document.fullscreenElement || document.webkitFullscreenElement ||
+                  navigator.standalone ||
+                  mm('(display-mode: fullscreen)') ||
+                  mm('(display-mode: standalone)') ||
+                  mm('(display-mode: minimal-ui)'));
+    }
+
+    function showToast(msg, ms) {
+        const t = document.getElementById('toast');
+        if (!t) return;
+        t.textContent = msg;
+        t.classList.add('show');
+        clearTimeout(showToast._h);
+        showToast._h = setTimeout(() => t.classList.remove('show'), ms || 4000);
+    }
+
+    function syncFsButton() {
+        const apiFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        // Installed app mode: the browser already owns full screen, so the toggle
+        // has nothing useful to do -> hidden via html.app-mode (cell kept, so the
+        // keypad grid does not shift). In a browser tab it stays as Full / Exit.
+        document.documentElement.classList.toggle('app-mode', runningInstalled() && !apiFS);
+        // The Fullscreen-API state draws under the cutout (unlike installed
+        // standalone) and gets its own safe-area rules via .api-fs.
+        document.documentElement.classList.toggle('api-fs', apiFS);
+        if (!fsBtn) return;
+        fsBtn.setAttribute('aria-pressed', apiFS ? 'true' : 'false');
+        fsBtn.textContent = apiFS ? 'Exit' : 'Full';
+    }
+
+    // Diagnostics: long-press (or right-click) the *display window* to see what the
+    // app detected. On the display rather than the Full button, because in installed
+    // app mode that button is hidden but this readout is still what you want.
+    const diagTarget = document.querySelector('.screen-container');
+    if (diagTarget) {
+        const reportMode = () => {
+            let mode = 'browser';
+            ['fullscreen', 'standalone', 'minimal-ui', 'picture-in-picture']
+                .some(v => mm('(display-mode: ' + v + ')') && (mode = v));
+            if (navigator.standalone && mode === 'browser') mode = 'standalone(iOS)';
+            const apiFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
+            showToast('mode: ' + mode + (apiFS ? ' + Fullscreen API' : '') +
+                      '\nreported insets T/B/L/R: ' + Math.round(readInset('Top')) + '/' +
+                      Math.round(readInset('Bottom')) + '/' + Math.round(readInset('Left')) + '/' +
+                      Math.round(readInset('Right')) +
+                      '\nguards applied T/B: ' + getComputedStyle(document.querySelector('.calculator')).paddingTop +
+                      '/' + getComputedStyle(document.querySelector('.calculator')).paddingBottom +
+                      '  app-h: ' + measureVisibleHeight() +
+                      // Which layout the aspect-ratio test picked, and why.
+                      '\nlayout: ' + (document.documentElement.classList.contains('wide') ? 'two-column' : 'one-column') +
+                      '  (' + Math.round(window.innerWidth) + 'x' + Math.round(window.innerHeight) +
+                      ', ratio ' + (window.innerHeight ? (window.innerWidth / window.innerHeight).toFixed(2) : '?') + ')', 7000);
+        };
+        let lpTimer = null;
+        diagTarget.addEventListener('pointerdown', () => {
+            lpTimer = setTimeout(() => { lpTimer = null; reportMode(); }, 550);
+        });
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev =>
+            diagTarget.addEventListener(ev, () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } }));
+        diagTarget.addEventListener('contextmenu', (e) => { e.preventDefault(); reportMode(); });
+    }
+
+    function toggleFullscreen() {
+        const el = document.documentElement;
+        const running = document.fullscreenElement || document.webkitFullscreenElement;
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        const req = el.requestFullscreen || el.webkitRequestFullscreen;
+
+        if (running && exit) {
+            Promise.resolve(exit.call(document)).catch(e => showToast('Could not exit: ' + e.name));
+            return;
+        }
+        if (!req) {
+            // iOS / WebKit: no element fullscreen for documents. Point at the
+            // supported route instead of failing quietly (this page already sets
+            // apple-mobile-web-app-capable, so Add to Home Screen = real
+            // full-screen launch).
+            showToast(isImmersive()
+                        ? 'Already full screen (installed app).'
+                        : 'No full-screen API here - use "Add to Home Screen" to launch it full screen.');
+            return;
+        }
+        if (document.fullscreenEnabled === false) {
+            showToast('Full screen is blocked for this page (permissions policy).');
+            return;
+        }
+
+        // navigationUI:'hide' asks the UA to drop its own bars; engines that do
+        // not know the option still accept the plain call.
+        const attempt = () => {
+            try { return req.call(el, { navigationUI: 'hide' }); }
+            catch (e) { return req.call(el); }
+        };
+        let p;
+        try { p = attempt(); } catch (e) { showToast('Full screen failed: ' + e.name); return; }
+        if (p && p.catch) p.catch(e => showToast('Full screen failed: ' + e.name +
+                                (e.name === 'NotAllowedError' ? ' (needs a direct tap, and permission)' : '')));
+    }
+
+    // Keep the button and the layout in step with every way in or out:
+    // our own call, Esc, system back/gesture, app install mode changes.
+    ['fullscreenchange', 'webkitfullscreenchange'].forEach(t =>
+        document.addEventListener(t, () => { syncFsButton(); fitToViewport(); }));
+    ['fullscreenerror', 'webkitfullscreenerror'].forEach(t =>
+        document.addEventListener(t, e => showToast('Full screen was refused by the browser.')));
+    const dmQuery = window.matchMedia ?
+        window.matchMedia('(display-mode: fullscreen), (display-mode: standalone), (display-mode: minimal-ui), (display-mode: browser)') : null;
+    if (dmQuery) {
+        // One query covering every mode, so a single listener catches entering
+        // *and* leaving installed-app display modes.
+        const onDm = () => { syncFsButton(); fitToViewport(); };
+        dmQuery.addEventListener ? dmQuery.addEventListener('change', onDm)
+                                 : dmQuery.addListener(onDm);   // older Safari
+    }
+    syncFsButton();
+
+    // ------------------------------------------------------------------
+    // Installation (PWA). Two supported routes, both handled:
+    //   * Chrome / Edge / Samsung Internet / Firefox Android: the browser fires
+    //     'beforeinstallprompt' once the manifest + service worker check out; we
+    //     stash the event and offer our own chip, then call prompt(). (If you
+    //     prefer the browser's built-in address-bar button, that still appears on
+    //     its own - this chip is additive.)
+    //   * iOS / iPadOS Safari: no install event exists. "Share > Add to Home
+    //     Screen" works off apple-touch-icon + apple-mobile-web-app-capable; we
+    //     detect the browser and show those words instead of a dead button.
+    // Already-installed runs (display-mode: standalone/fullscreen or
+    // navigator.standalone) never get the chip, and isImmersive() already covers
+    // their layout.
+    let deferredInstallPrompt = null;
+    const installChip = document.getElementById('installChip');
+
+    function runningInstalled() {
+        return !!navigator.standalone ||
+               mm('(display-mode: standalone)') || mm('(display-mode: fullscreen)') ||
+               mm('(display-mode: minimal-ui)');
+    }
+
+    function dismissInstallChip() {
+        document.documentElement.classList.remove('can-install');
+        try { sessionStorage.setItem('rpn-install-dismissed', '1'); } catch (e) {}
+    }
+
+    function installApp() {
+        if (deferredInstallPrompt) {
+            deferredInstallPrompt.prompt();
+            deferredInstallPrompt.userChoice.then((choice) => {
+                showToast(choice.outcome === 'accepted'
+                            ? 'Installing - look for the app icon.'
+                            : 'Maybe next time.');
+                deferredInstallPrompt = null;
+                dismissInstallChip();
+            }).catch(() => {});
+        } else {
+            // iOS / anything without the event: say how, don't fail silently.
+            showToast('iOS: tap Share, then "Add to Home Screen".\nAndroid: browser menu > "Install app".');
+        }
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();                       // we show our own chip
+        deferredInstallPrompt = e;
+        let dismissed = false;
+        try { dismissed = !!sessionStorage.getItem('rpn-install-dismissed'); } catch (err) {}
+        if (!dismissed && !runningInstalled()) {
+            document.documentElement.classList.add('can-install');
+        }
+    });
+
+    window.addEventListener('appinstalled', () => {
+        deferredInstallPrompt = null;
+        dismissInstallChip();
+        showToast('Installed. Launch it from your home screen / app list.');
+    });
+
+    // No event but an installable-looking browser (iOS Safari): keep the chip as
+    // a how-to hint, since Add to Home Screen is manual there.
+    if (!runningInstalled() && typeof InstallPromptEvent === 'undefined' &&
+        /iPhone|iPad|iPod/.test(navigator.userAgent) && navigator.maxTouchPoints > 0) {
+        let alreadyDismissed = false;
+        try { alreadyDismissed = !!sessionStorage.getItem('rpn-install-dismissed'); } catch (e) {}
+        if (!alreadyDismissed) {
+            const label = installChip && installChip.querySelector('span');
+            if (label) label.textContent = 'Full screen on iOS:';
+            document.documentElement.classList.add('can-install');
+        }
+    }
+
+    // Service worker: enables offline launches once installed. Ignored on http://
+    // and file://, so guard rather than throw.
+    if ('serviceWorker' in navigator &&
+        (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('sw.js', { scope: './' })
+                .catch(() => { /* offline support absent; app still works */ });
+        });
+    }
+
+    // Keyboard Support
+    document.addEventListener('keydown', (event) => {
+        const key = event.key;
+        
+        if (key !== ' ' && !isNaN(key)) appendNum(key);
+        if (key === '.') appendNum('.');
+        if (key === 'e' || key === 'E') handleExponent(event.shiftKey);   // EE / EE-
+        if (key === 'Enter') {
+	    event.preventDefault();
+	    handleEnter();
+	}
+        if (key === '+' || key === '-' || key === '*' || key === '/') handleOp(key);
+        if (key === '^') handleOp('^');
+        // Use the button's handler: it honours the cursor position (the old inline
+        // slice(0,-1) always deleted the last character and could drive the cursor
+        // negative), and it keeps 'e+' / 'e-' atomic.
+        if (key === 'Backspace') handleBackspace();
+        if (key === 'ArrowLeft') moveCursor(-1);
+        if (key === 'ArrowRight') moveCursor(1);
+    });
+
+    // Initialize display
+    updateDisplay();
+</script>
+
+</body>
+</html>
